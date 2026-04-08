@@ -8,16 +8,29 @@ def load_formatted_csv_to_db(csv_path, table_name, db_path):
         return
     
     try:
-        # Carregar o CSV formatado pelo novo get_data.py
+        # Carregar o CSV formatado
         df = pd.read_csv(csv_path, sep=";", encoding="utf-8")
         
+        # Identificar colunas que não são de metadados (metadados: Municipio, ANO, MES)
+        meta_cols = ['Municipio', 'ANO', 'MES']
+        # Se o CSV tiver outros nomes para município, pegamos a primeira coluna
+        if df.columns[0] not in meta_cols:
+            meta_cols[0] = df.columns[0]
+            
+        data_cols = [c for c in df.columns if c not in meta_cols]
+        
+        # Forçar conversão numérica para todas as colunas de dados
+        for col in data_cols:
+            # Substituir hífens, espaços e converter para float, preenchendo erros com 0
+            df[col] = pd.to_numeric(df[col].astype(str).replace('-', '0').replace('', '0'), errors='coerce').fillna(0)
+            
         # Conectar ao banco
         conn = sqlite3.connect(db_path)
         
         # Salvar no banco
         df.to_sql(table_name, conn, if_exists="replace", index=False)
         conn.close()
-        print(f"Tabela {table_name} atualizada com {len(df)} registros e {len(df.columns)} colunas.")
+        print(f"Tabela {table_name} atualizada com {len(df)} registros e {len(df.columns)} colunas numéricas.")
     except Exception as e:
         print(f"Erro ao carregar {table_name}: {e}")
 

@@ -23,6 +23,16 @@ def load_data(table_name):
         conn = get_connection()
         df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
         conn.close()
+        
+        # Garantir conversão numérica no app para segurança
+        meta_cols = ['Municipio', 'ANO', 'MES']
+        if not df.empty and df.columns[0] not in meta_cols:
+            meta_cols[0] = df.columns[0]
+            
+        for col in df.columns:
+            if col not in meta_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
         return df
     except Exception as e:
         st.error(f"Erro ao carregar dados: {e}")
@@ -51,7 +61,7 @@ if tab_choice == "Dashboard":
             meses = sorted(df['MES'].unique().tolist())
             selected_mes = st.multiselect("Filtrar por Mês:", meses, default=meses)
         with col_f3:
-            mun_col = df.columns[0] # Geralmente Município
+            mun_col = df.columns[0] # Município
             municipios = sorted(df[mun_col].unique().tolist())
             selected_mun = st.multiselect("Filtrar por Município:", municipios)
 
@@ -79,12 +89,20 @@ if tab_choice == "Dashboard":
 
         # Distribuição por Variáveis (QTD_XXXX, VALOR_XXXX)
         st.header("🔍 Detalhamento por Subgrupo")
-        var_cols = [c for c in df_filtered.columns if 'QTD_' in c or 'VALOR_' in c or 'VALOR' in c]
+        var_cols = [c for c in df_filtered.columns if 'QTD_' in c or 'VALOR_' in c or 'VL_' in c or 'QT_' in c]
         selected_var = st.selectbox("Selecione uma variável para análise:", var_cols)
         
-        fig_bar = px.bar(df_filtered.groupby(mun_col)[selected_var].sum().reset_index().nlargest(15, selected_var), 
-                         x=mun_col, y=selected_var, title=f"Top 15 Municípios - {selected_var}")
-        st.plotly_chart(fig_bar, use_container_width=True)
+        try:
+            # Agrupar e garantir que o resultado seja numérico para o nlargest
+            chart_df = df_filtered.groupby(mun_col)[selected_var].sum().reset_index()
+            chart_df[selected_var] = pd.to_numeric(chart_df[selected_var], errors='coerce').fillna(0)
+            top_df = chart_df.nlargest(15, selected_var)
+            
+            fig_bar = px.bar(top_df, x=mun_col, y=selected_var, title=f"Top 15 Municípios - {selected_var}", 
+                             color=selected_var, color_continuous_scale='Viridis')
+            st.plotly_chart(fig_bar, use_container_width=True)
+        except Exception as e:
+            st.error(f"Erro ao gerar gráfico de barras: {e}. Verifique se a variável selecionada possui dados numéricos válidos.")
 
 elif tab_choice == "Validação SQL (Quadro Branco)":
     st.header("📑 Validação de Carga dos Dados")
