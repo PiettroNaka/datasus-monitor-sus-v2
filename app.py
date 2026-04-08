@@ -7,20 +7,8 @@ import os
 
 st.set_page_config(page_title="Monitor SUS Analytics", layout="wide", initial_sidebar_state="expanded")
 
-# Estilo CSS customizado para um visual mais "Data Science"
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f8f9fa;
-    }
-    .stMetric {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    </style>
-    """, unsafe_allow_index=True)
+st.title("📊 Monitoramento de Produção Hospitalar e Ambulatorial (SUS)")
+st.markdown("Dashboard adaptado conforme o fluxo de scraping e validação mensal.")
 
 # Conexão com o banco de dados
 db_path = "datasus.db"
@@ -75,7 +63,7 @@ else:
     df_filtered = df[df['ANO'].isin(selected_ano) & df['MES'].isin(selected_mes)]
 
     if tab_choice == "Dashboard Executivo":
-        st.title(f"📈 Dashboard Executivo - {source}")
+        st.header(f"📈 Dashboard Executivo - {source}")
         
         # KPIs no Topo
         total_invest = df_filtered['VL_TOTAL'].sum()
@@ -125,38 +113,43 @@ else:
             st.subheader("🔥 Concentração de Custos")
             # Heatmap de Sazonalidade
             pivot_heat = df_filtered.pivot_table(index='MES', columns='ANO', values='VL_TOTAL', aggfunc='sum')
-            pivot_heat = pivot_heat.reindex(['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'])
+            # Garantir que todos os meses estejam presentes para evitar erros no gráfico
+            all_months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+            pivot_heat = pivot_heat.reindex(all_months).fillna(0)
             fig_heat = px.imshow(pivot_heat, labels=dict(x="Ano", y="Mês", color="Valor"), color_continuous_scale='RdYlGn_r')
             st.plotly_chart(fig_heat, use_container_width=True)
 
     elif tab_choice == "Análise de Pareto":
-        st.title("🎯 Análise de Pareto (Regra 80/20)")
+        st.header("🎯 Análise de Pareto (Regra 80/20)")
         st.markdown("Identificação dos subgrupos que representam a maior parte do investimento.")
         
         # Preparar dados para Pareto
         var_cols = [c for c in df_filtered.columns if 'VALOR_' in c and 'TOTAL' not in c]
-        pareto_df = df_filtered[var_cols].sum().reset_index()
-        pareto_df.columns = ['Subgrupo', 'Valor']
-        pareto_df = pareto_df.sort_values('Valor', ascending=False)
-        pareto_df['Cum_Sum'] = pareto_df['Valor'].cumsum()
-        pareto_df['Cum_Perc'] = 100 * pareto_df['Cum_Sum'] / pareto_df['Valor'].sum()
-        
-        fig_pareto = go.Figure()
-        fig_pareto.add_trace(go.Bar(x=pareto_df['Subgrupo'], y=pareto_df['Valor'], name="Valor Individual", marker_color='#1f77b4'))
-        fig_pareto.add_trace(go.Scatter(x=pareto_df['Subgrupo'], y=pareto_df['Cum_Perc'], name="% Acumulada", yaxis="y2", line=dict(color="#d62728", width=3)))
-        
-        fig_pareto.update_layout(
-            title="Curva de Pareto por Subgrupo de Procedimento",
-            yaxis=dict(title="Valor (R$)"),
-            yaxis2=dict(title="Percentual Acumulado (%)", overlaying="y", side="right", range=[0, 105]),
-            template="plotly_white"
-        )
-        st.plotly_chart(fig_pareto, use_container_width=True)
-        
-        st.info("💡 Os subgrupos à esquerda da linha de 80% são os que exigem maior atenção na gestão orçamentária.")
+        if not var_cols:
+            st.warning("Não há dados de subgrupos disponíveis para esta fonte.")
+        else:
+            pareto_df = df_filtered[var_cols].sum().reset_index()
+            pareto_df.columns = ['Subgrupo', 'Valor']
+            pareto_df = pareto_df.sort_values('Valor', ascending=False)
+            pareto_df['Cum_Sum'] = pareto_df['Valor'].cumsum()
+            pareto_df['Cum_Perc'] = 100 * pareto_df['Cum_Sum'] / pareto_df['Valor'].sum()
+            
+            fig_pareto = go.Figure()
+            fig_pareto.add_trace(go.Bar(x=pareto_df['Subgrupo'], y=pareto_df['Valor'], name="Valor Individual", marker_color='#1f77b4'))
+            fig_pareto.add_trace(go.Scatter(x=pareto_df['Subgrupo'], y=pareto_df['Cum_Perc'], name="% Acumulada", yaxis="y2", line=dict(color="#d62728", width=3)))
+            
+            fig_pareto.update_layout(
+                title="Curva de Pareto por Subgrupo de Procedimento",
+                yaxis=dict(title="Valor (R$)"),
+                yaxis2=dict(title="Percentual Acumulado (%)", overlaying="y", side="right", range=[0, 105]),
+                template="plotly_white"
+            )
+            st.plotly_chart(fig_pareto, use_container_width=True)
+            
+            st.info("💡 Os subgrupos à esquerda da linha de 80% são os que exigem maior atenção na gestão orçamentária.")
 
     elif tab_choice == "Validação Técnica":
-        st.title("⚙️ Validação Técnica de Dados")
+        st.header("⚙️ Validação Técnica de Dados")
         
         # Query do Quadro Branco
         st.subheader("Query de Validação (Quadro Branco)")
