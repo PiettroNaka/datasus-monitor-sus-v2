@@ -10,7 +10,7 @@ st.title("📊 Monitoramento de Produção Hospitalar e Ambulatorial (SUS)")
 st.markdown("Dashboard desenvolvido com dados parciais extraídos do portal DATASUS TabNet.")
 
 # Conexão com o banco de dados
-db_path = "/home/ubuntu/datasus.db"
+db_path = "datasus.db"
 
 def load_data(table_name):
     if not os.path.exists(db_path):
