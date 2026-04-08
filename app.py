@@ -2,12 +2,25 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
+import plotly.graph_objects as go
 import os
 
-st.set_page_config(page_title="Monitor SUS - DATASUS v2", layout="wide")
+st.set_page_config(page_title="Monitor SUS Analytics", layout="wide", initial_sidebar_state="expanded")
 
-st.title("📊 Monitoramento de Produção Hospitalar e Ambulatorial (SUS)")
-st.markdown("Dashboard adaptado conforme o fluxo de scraping e validação mensal.")
+# Estilo CSS customizado para um visual mais "Data Science"
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f8f9fa;
+    }
+    .stMetric {
+        background-color: #ffffff;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    </style>
+    """, unsafe_allow_index=True)
 
 # Conexão com o banco de dados
 db_path = "datasus.db"
@@ -15,16 +28,16 @@ db_path = "datasus.db"
 def get_connection():
     return sqlite3.connect(db_path)
 
+@st.cache_data
 def load_data(table_name):
     if not os.path.exists(db_path):
-        st.error(f"Arquivo de banco de dados '{db_path}' não encontrado.")
         return pd.DataFrame()
     try:
         conn = get_connection()
         df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
         conn.close()
         
-        # Garantir conversão numérica no app para segurança
+        # Garantir conversão numérica
         meta_cols = ['Municipio', 'ANO', 'MES']
         if not df.empty and df.columns[0] not in meta_cols:
             meta_cols[0] = df.columns[0]
@@ -38,98 +51,124 @@ def load_data(table_name):
         st.error(f"Erro ao carregar dados: {e}")
         return pd.DataFrame()
 
-# Sidebar para navegação
-st.sidebar.header("Configurações")
-tab_choice = st.sidebar.radio("Navegação:", ["Dashboard", "Validação SQL (Quadro Branco)"])
+# Sidebar
+st.sidebar.title("📊 Monitor SUS Analytics")
+st.sidebar.markdown("---")
+tab_choice = st.sidebar.radio("Navegação:", ["Dashboard Executivo", "Análise de Pareto", "Validação Técnica"])
 source = st.sidebar.radio("Fonte de dados:", ["Produção Hospitalar (SIH)", "Produção Ambulatorial (SIA)"])
 
 table_name = "sih_data" if source == "Produção Hospitalar (SIH)" else "sia_data"
+df = load_data(table_name)
 
-if tab_choice == "Dashboard":
-    df = load_data(table_name)
-    if df.empty:
-        st.warning(f"Nenhum dado encontrado para {source}.")
-    else:
-        st.header(f"📋 Visão Geral - {source}")
+if df.empty:
+    st.warning(f"Aguardando extração completa dos dados de {source}...")
+else:
+    mun_col = df.columns[0]
+    
+    # Filtros Globais
+    st.sidebar.markdown("---")
+    anos = sorted(df['ANO'].unique().tolist())
+    selected_ano = st.sidebar.multiselect("Anos:", anos, default=anos)
+    meses = sorted(df['MES'].unique().tolist())
+    selected_mes = st.sidebar.multiselect("Meses:", meses, default=meses)
+    
+    df_filtered = df[df['ANO'].isin(selected_ano) & df['MES'].isin(selected_mes)]
+
+    if tab_choice == "Dashboard Executivo":
+        st.title(f"📈 Dashboard Executivo - {source}")
         
-        # Filtros
-        col_f1, col_f2, col_f3 = st.columns(3)
-        with col_f1:
-            anos = sorted(df['ANO'].unique().tolist())
-            selected_ano = st.multiselect("Filtrar por Ano:", anos, default=anos)
-        with col_f2:
-            meses = sorted(df['MES'].unique().tolist())
-            selected_mes = st.multiselect("Filtrar por Mês:", meses, default=meses)
-        with col_f3:
-            mun_col = df.columns[0] # Município
-            municipios = sorted(df[mun_col].unique().tolist())
-            selected_mun = st.multiselect("Filtrar por Município:", municipios)
-
-        # Aplicar filtros
-        df_filtered = df[df['ANO'].isin(selected_ano) & df['MES'].isin(selected_mes)]
-        if selected_mun:
-            df_filtered = df_filtered[df_filtered[mun_col].isin(selected_mun)]
-
-        st.dataframe(df_filtered.head(100))
-
-        # Estatísticas e Gráficos
-        st.header("📈 Estatísticas e Tendências")
+        # KPIs no Topo
+        total_invest = df_filtered['VL_TOTAL'].sum()
+        total_qtd = df_filtered['QT_TOTAL'].sum()
+        ticket_medio = total_invest / total_qtd if total_qtd > 0 else 0
         
-        # Agrupar por tempo para gráfico de linha
+        kpi1, kpi2, kpi3 = st.columns(3)
+        kpi1.metric("Investimento Total", f"R$ {total_invest:,.2f}")
+        kpi2.metric("Total de Procedimentos", f"{int(total_qtd):,}")
+        kpi3.metric("Custo Médio p/ Procedimento", f"R$ {ticket_medio:,.2f}")
+        
+        st.markdown("---")
+        
+        # Tendência Temporal
+        st.subheader("📅 Evolução Mensal de Custos e Volume")
         trend_df = df_filtered.groupby(['ANO', 'MES'])[['QT_TOTAL', 'VL_TOTAL']].sum().reset_index()
+        # Ordenação correta por mês/ano
+        month_map = {'Jan':1, 'Fev':2, 'Mar':3, 'Abr':4, 'Mai':5, 'Jun':6, 
+                     'Jul':7, 'Ago':8, 'Set':9, 'Out':10, 'Nov':11, 'Dez':12}
+        trend_df['MONTH_NUM'] = trend_df['MES'].map(month_map)
+        trend_df = trend_df.sort_values(['ANO', 'MONTH_NUM'])
         trend_df['PERIODO'] = trend_df['MES'] + '/' + trend_df['ANO'].astype(str)
         
-        c1, c2 = st.columns(2)
-        with c1:
-            fig_line_qt = px.line(trend_df, x='PERIODO', y='QT_TOTAL', title="Evolução Mensal - Quantidade Total")
-            st.plotly_chart(fig_line_qt, use_container_width=True)
-        with c2:
-            fig_line_vl = px.line(trend_df, x='PERIODO', y='VL_TOTAL', title="Evolução Mensal - Valor Total")
-            st.plotly_chart(fig_line_vl, use_container_width=True)
-
-        # Distribuição por Variáveis (QTD_XXXX, VALOR_XXXX)
-        st.header("🔍 Detalhamento por Subgrupo")
-        var_cols = [c for c in df_filtered.columns if 'QTD_' in c or 'VALOR_' in c or 'VL_' in c or 'QT_' in c]
-        selected_var = st.selectbox("Selecione uma variável para análise:", var_cols)
+        fig_trend = go.Figure()
+        fig_trend.add_trace(go.Scatter(x=trend_df['PERIODO'], y=trend_df['VL_TOTAL'], name='Valor Total', line=dict(color='#1f77b4', width=4)))
+        fig_trend.add_trace(go.Bar(x=trend_df['PERIODO'], y=trend_df['QT_TOTAL'], name='Quantidade', yaxis='y2', opacity=0.3, marker_color='#ff7f0e'))
         
-        try:
-            # Agrupar e garantir que o resultado seja numérico para o nlargest
-            chart_df = df_filtered.groupby(mun_col)[selected_var].sum().reset_index()
-            chart_df[selected_var] = pd.to_numeric(chart_df[selected_var], errors='coerce').fillna(0)
-            top_df = chart_df.nlargest(15, selected_var)
+        fig_trend.update_layout(
+            title="Série Histórica: Investimento vs. Volume",
+            yaxis=dict(title="Valor (R$)"),
+            yaxis2=dict(title="Quantidade", overlaying='y', side='right'),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            template="plotly_white"
+        )
+        st.plotly_chart(fig_trend, use_container_width=True)
+        
+        # Análise Geográfica (Top Municípios)
+        col_geo1, col_geo2 = st.columns(2)
+        with col_geo1:
+            st.subheader("📍 Top 10 Municípios por Investimento")
+            top_mun = df_filtered.groupby(mun_col)['VL_TOTAL'].sum().nlargest(10).reset_index()
+            fig_mun = px.bar(top_mun, x='VL_TOTAL', y=mun_col, orientation='h', color='VL_TOTAL', color_continuous_scale='Blues')
+            fig_mun.update_layout(showlegend=False, yaxis={'categoryorder':'total ascending'})
+            st.plotly_chart(fig_mun, use_container_width=True)
             
-            fig_bar = px.bar(top_df, x=mun_col, y=selected_var, title=f"Top 15 Municípios - {selected_var}", 
-                             color=selected_var, color_continuous_scale='Viridis')
-            st.plotly_chart(fig_bar, use_container_width=True)
-        except Exception as e:
-            st.error(f"Erro ao gerar gráfico de barras: {e}. Verifique se a variável selecionada possui dados numéricos válidos.")
+        with col_geo2:
+            st.subheader("🔥 Concentração de Custos")
+            # Heatmap de Sazonalidade
+            pivot_heat = df_filtered.pivot_table(index='MES', columns='ANO', values='VL_TOTAL', aggfunc='sum')
+            pivot_heat = pivot_heat.reindex(['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'])
+            fig_heat = px.imshow(pivot_heat, labels=dict(x="Ano", y="Mês", color="Valor"), color_continuous_scale='RdYlGn_r')
+            st.plotly_chart(fig_heat, use_container_width=True)
 
-elif tab_choice == "Validação SQL (Quadro Branco)":
-    st.header("📑 Validação de Carga dos Dados")
-    st.markdown("Execução da query de validação conforme especificado no quadro branco.")
-    
-    query = f"""
-    SELECT 
-        ANO, 
-        MES, 
-        SUM(QT_TOTAL) as TOTAL_QUANTIDADE, 
-        SUM(VL_TOTAL) as TOTAL_VALOR
-    FROM {table_name}
-    GROUP BY ANO, MES
-    ORDER BY ANO, MES
-    """
-    
-    st.code(query, language="sql")
-    
-    if st.button("Executar Validação"):
-        try:
+    elif tab_choice == "Análise de Pareto":
+        st.title("🎯 Análise de Pareto (Regra 80/20)")
+        st.markdown("Identificação dos subgrupos que representam a maior parte do investimento.")
+        
+        # Preparar dados para Pareto
+        var_cols = [c for c in df_filtered.columns if 'VALOR_' in c and 'TOTAL' not in c]
+        pareto_df = df_filtered[var_cols].sum().reset_index()
+        pareto_df.columns = ['Subgrupo', 'Valor']
+        pareto_df = pareto_df.sort_values('Valor', ascending=False)
+        pareto_df['Cum_Sum'] = pareto_df['Valor'].cumsum()
+        pareto_df['Cum_Perc'] = 100 * pareto_df['Cum_Sum'] / pareto_df['Valor'].sum()
+        
+        fig_pareto = go.Figure()
+        fig_pareto.add_trace(go.Bar(x=pareto_df['Subgrupo'], y=pareto_df['Valor'], name="Valor Individual", marker_color='#1f77b4'))
+        fig_pareto.add_trace(go.Scatter(x=pareto_df['Subgrupo'], y=pareto_df['Cum_Perc'], name="% Acumulada", yaxis="y2", line=dict(color="#d62728", width=3)))
+        
+        fig_pareto.update_layout(
+            title="Curva de Pareto por Subgrupo de Procedimento",
+            yaxis=dict(title="Valor (R$)"),
+            yaxis2=dict(title="Percentual Acumulado (%)", overlaying="y", side="right", range=[0, 105]),
+            template="plotly_white"
+        )
+        st.plotly_chart(fig_pareto, use_container_width=True)
+        
+        st.info("💡 Os subgrupos à esquerda da linha de 80% são os que exigem maior atenção na gestão orçamentária.")
+
+    elif tab_choice == "Validação Técnica":
+        st.title("⚙️ Validação Técnica de Dados")
+        
+        # Query do Quadro Branco
+        st.subheader("Query de Validação (Quadro Branco)")
+        query = f"SELECT ANO, MES, SUM(QT_TOTAL) as QT_TOTAL, SUM(VL_TOTAL) as VL_TOTAL FROM {table_name} GROUP BY ANO, MES ORDER BY ANO, MES"
+        st.code(query, language="sql")
+        
+        if st.button("Executar Query"):
             conn = get_connection()
             val_df = pd.read_sql(query, conn)
             conn.close()
-            
-            st.success("Validação concluída!")
             st.table(val_df)
             
-            st.info("💡 Compare os resultados acima com os totais exibidos no portal TabNet para o mesmo período.")
-        except Exception as e:
-            st.error(f"Erro ao executar validação: {e}")
+        st.markdown("---")
+        st.subheader("Amostra dos Dados Brutos")
+        st.dataframe(df_filtered.head(500))

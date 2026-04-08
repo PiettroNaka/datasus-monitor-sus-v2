@@ -41,7 +41,7 @@ async def get_tabnet_data_monthly(url, group_name, months_to_extract=12):
             if 'quantidade' in text.lower() or 'valor' in text.lower() or 'qtd' in text.lower():
                 contents.append({'label': text, 'value': await opt.get_attribute('value')})
 
-        # Obter lista de períodos (Meses)
+        # Obter lista de períodos (12 meses)
         period_options = await page.query_selector_all('select#A option')
         periods = []
         for opt in period_options[:months_to_extract]:
@@ -54,7 +54,7 @@ async def get_tabnet_data_monthly(url, group_name, months_to_extract=12):
             # Selecionar o mês atual
             await page.select_option('select#A', value=period['value'])
             
-            # Extrair cada conteúdo separadamente para evitar erro de múltiplos conteúdos
+            # Extrair cada conteúdo separadamente
             for content in contents:
                 print(f"  Extraindo {content['label']}...")
                 await page.select_option('select#I', value=content['value'])
@@ -76,12 +76,8 @@ async def get_tabnet_data_monthly(url, group_name, months_to_extract=12):
                     # Parsing básico do CSV
                     df_temp = parse_raw_tabnet(raw_text)
                     if df_temp is not None:
-                        # Adicionar metadados de tempo
                         match = re.search(r'(\w{3})/(\d{4})', period['label'])
-                        if match:
-                            month_str, year_str = match.groups()
-                        else:
-                            month_str, year_str = "IGN", "0000"
+                        month_str, year_str = match.groups() if match else ("IGN", "0000")
                             
                         df_temp['ANO'] = year_str
                         df_temp['MES'] = month_str
@@ -124,11 +120,7 @@ def pivot_datasus_data(df):
     
     # Transformar para formato longo
     df_long = df.melt(id_vars=meta_cols, value_vars=subgroups, var_name='SUBGRUPO_NOME', value_name='VALOR_NUM')
-    
-    # Limpar o nome do subgrupo para pegar apenas o código
     df_long['SUBGRUPO_CODE'] = df_long['SUBGRUPO_NOME'].str.extract(r'(\d{4})')
-    
-    # Criar o nome da variável final
     df_long['VAR_NAME'] = df_long['METRICA'] + '_' + df_long['SUBGRUPO_CODE'].fillna('TOTAL')
     
     # Pivotar
@@ -151,13 +143,13 @@ async def main():
     sih_url = "http://tabnet.datasus.gov.br/cgi/deftohtm.exe?sih/cnv/spabr.def"
     sia_url = "http://tabnet.datasus.gov.br/cgi/deftohtm.exe?sia/cnv/qabr.def"
     
-    # Extrair 2 meses para teste rápido
-    df_sih = await get_tabnet_data_monthly(sih_url, "SIH", months_to_extract=2)
+    # Extrair 12 meses
+    df_sih = await get_tabnet_data_monthly(sih_url, "SIH", months_to_extract=12)
     if df_sih is not None:
         df_sih.to_csv("/home/ubuntu/datasus-v2/sih_formatted.csv", index=False, sep=';')
         print("SIH Formatado salvo.")
 
-    df_sia = await get_tabnet_data_monthly(sia_url, "SIA", months_to_extract=2)
+    df_sia = await get_tabnet_data_monthly(sia_url, "SIA", months_to_extract=12)
     if df_sia is not None:
         df_sia.to_csv("/home/ubuntu/datasus-v2/sia_formatted.csv", index=False, sep=';')
         print("SIA Formatado salvo.")
