@@ -130,6 +130,35 @@ table_name = "sih_data" if "SIH" in source_opt else "sia_data"
 
 raw_df = fetch_analytics_data(table_name)
 
+# 🔍 DEBUG DOS DADOS (cole aqui)
+with st.expander("DEBUG - Diagnóstico da base", expanded=True):
+    st.write("Colunas:", raw_df.columns.tolist())
+
+    st.write("Tipos:")
+    st.dataframe(pd.DataFrame({
+        "coluna": raw_df.columns,
+        "dtype": [str(raw_df[c].dtype) for c in raw_df.columns]
+    }), use_container_width=True)
+
+    st.write("Primeiras 20 linhas:")
+    st.dataframe(raw_df.head(20), use_container_width=True)
+
+    if "MES" in raw_df.columns:
+        st.write("Valores únicos de MES:")
+        st.write(sorted(raw_df["MES"].astype(str).unique().tolist()))
+
+    for col in ["QT_TOTAL", "VL_TOTAL"]:
+        if col in raw_df.columns:
+            st.write(f"Amostra bruta de {col}:")
+            st.write(raw_df[col].astype(str).head(20).tolist())
+
+            st.write(f"Resumo de {col}:")
+            st.write({
+                "nulos": int(raw_df[col].isna().sum()),
+                "min": pd.to_numeric(raw_df[col], errors="coerce").min(),
+                "max": pd.to_numeric(raw_df[col], errors="coerce").max(),
+            })
+
 if raw_df.empty:
     st.warning("Database synchronization in progress...")
     st.stop()
