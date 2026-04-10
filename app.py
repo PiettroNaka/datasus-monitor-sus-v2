@@ -39,29 +39,104 @@ def fetch_analytics_data(table_name):
         if df.empty:
             return df
 
-        # Definição das colunas meta
-        mun_col = df.columns[0]
-        meta_cols = [mun_col, "ANO", "MES"]
+        # =========================================================
+        # 1) PADRONIZAÇÃO DOS NOMES DAS COLUNAS
+        # =========================================================
+        df.columns = [str(c).strip() for c in df.columns]
 
-        # Padronização básica
-        if "ANO" in df.columns:
-            df["ANO"] = pd.to_numeric(df["ANO"], errors="coerce")
+        # Renomeia a primeira coluna geográfica para "Municipio"
+        if len(df.columns) > 0:
+            primeira_col = df.columns[0]
+            if primeira_col != "Municipio":
+                df = df.rename(columns={primeira_col: "Municipio"})
 
-        if "MES" in df.columns:
-            df["MES"] = df["MES"].astype(str).str.strip()
+        # Padroniza nomes equivalentes
+        rename_map = {}
 
-        # Converte somente colunas realmente numéricas candidatas
+        if "QTD_TOTAL" in df.columns and "QT_TOTAL" not in df.columns:
+            rename_map["QTD_TOTAL"] = "QT_TOTAL"
+
+        if "VALOR_TOTAL" in df.columns and "VL_TOTAL" not in df.columns:
+            rename_map["VALOR_TOTAL"] = "VL_TOTAL"
+
+        df = df.rename(columns=rename_map)
+
+        # Se existirem as duas versões, consolida em QT_TOTAL e VL_TOTAL
+        if "QTD_TOTAL" in df.columns and "QT_TOTAL" in df.columns:
+            df["QT_TOTAL"] = pd.to_numeric(df["QT_TOTAL"], errors="coerce")
+            df["QTD_TOTAL"] = pd.to_numeric(df["QTD_TOTAL"], errors="coerce")
+            df["QT_TOTAL"] = df["QT_TOTAL"].fillna(df["QTD_TOTAL"])
+            df = df.drop(columns=["QTD_TOTAL"])
+
+        if "VALOR_TOTAL" in df.columns and "VL_TOTAL" in df.columns:
+            df["VL_TOTAL"] = pd.to_numeric(df["VL_TOTAL"], errors="coerce")
+            df["VALOR_TOTAL"] = pd.to_numeric(df["VALOR_TOTAL"], errors="coerce")
+            df["VL_TOTAL"] = df["VL_TOTAL"].fillna(df["VALOR_TOTAL"])
+            df = df.drop(columns=["VALOR_TOTAL"])
+
+        # =========================================================
+        # 2) GARANTIA DAS COLUNAS OBRIGATÓRIAS
+        # =========================================================
+        required_cols = ["Municipio", "ANO", "MES", "QT_TOTAL", "VL_TOTAL"]
+        for col in required_cols:
+            if col not in df.columns:
+                st.error(f"Coluna obrigatória ausente: {col}")
+                return pd.DataFrame()
+
+        # =========================================================
+        # 3) LIMPEZA ROBUSTA DE NÚMEROS
+        # =========================================================
+        def limpar_numero_br(x):
+            if pd.isna(x):
+                return pd.NA
+
+            s = str(x).strip()
+
+            if s == "" or s.lower() in ["nan", "none", "null", "-", "--"]:
+                return pd.NA
+
+            s = s.replace(" ", "")
+
+            # padrão BR: 1.234,56
+            if "." in s and "," in s:
+                s = s.replace(".", "").replace(",", ".")
+            # decimal BR: 123,45
+            elif "," in s:
+                s = s.replace(",", ".")
+
+            try:
+                return float(s)
+            except Exception:
+                return pd.NA
+
+        # Limpa colunas principais
+        df["ANO"] = df["ANO"].apply(limpar_numero_br)
+        df["QT_TOTAL"] = df["QT_TOTAL"].apply(limpar_numero_br)
+        df["VL_TOTAL"] = df["VL_TOTAL"].apply(limpar_numero_br)
+
+        # Limpa demais colunas numéricas, exceto metadados
+        meta_cols = ["Municipio", "ANO", "MES"]
         for col in df.columns:
             if col not in meta_cols:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+                df[col] = df[col].apply(limpar_numero_br)
 
-        # Preenche numéricas com zero somente após conversão
-        num_cols = df.select_dtypes(include=["number"]).columns.tolist()
-        fill_zero_cols = [c for c in num_cols if c not in ["ANO"]]
-        if fill_zero_cols:
-            df[fill_zero_cols] = df[fill_zero_cols].fillna(0)
+        # Conversão final
+        df["ANO"] = pd.to_numeric(df["ANO"], errors="coerce")
+        df["QT_TOTAL"] = pd.to_numeric(df["QT_TOTAL"], errors="coerce")
+        df["VL_TOTAL"] = pd.to_numeric(df["VL_TOTAL"], errors="coerce")
 
-        # Normalização de mês
+        # Regras de saneamento
+        df.loc[df["QT_TOTAL"] < 0, "QT_TOTAL"] = pd.NA
+        df.loc[df["VL_TOTAL"] < 0, "VL_TOTAL"] = pd.NA
+
+        df["QT_TOTAL"] = df["QT_TOTAL"].fillna(0)
+        df["VL_TOTAL"] = df["VL_TOTAL"].fillna(0)
+
+        # =========================================================
+        # 4) PADRONIZAÇÃO DE MÊS
+        # =========================================================
+        df["MES"] = df["MES"].astype(str).str.strip()
+
         month_map = {
             "Jan": 1, "Janeiro": 1, "1": 1, "01": 1,
             "Fev": 2, "Fevereiro": 2, "2": 2, "02": 2,
@@ -74,13 +149,13 @@ def fetch_analytics_data(table_name):
             "Set": 9, "Setembro": 9, "9": 9, "09": 9,
             "Out": 10, "Outubro": 10, "10": 10,
             "Nov": 11, "Novembro": 11, "11": 11,
-            "Dez": 12, "Dezembro": 12, "12": 12,
+            "Dez": 12, "Dezembro": 12, "12": 12
         }
 
         df["MES_PAD"] = df["MES"].astype(str).str.strip().str.title()
         df["MONTH_NUM"] = df["MES_PAD"].map(month_map)
 
-        # Fallback: se MES já vier numérico como texto
+        # fallback: se MES já vier numérico
         mask_month_null = df["MONTH_NUM"].isna()
         if mask_month_null.any():
             df.loc[mask_month_null, "MONTH_NUM"] = pd.to_numeric(
@@ -88,16 +163,15 @@ def fetch_analytics_data(table_name):
             )
 
         df["MONTH_NUM"] = pd.to_numeric(df["MONTH_NUM"], errors="coerce")
-        df["ANO"] = pd.to_numeric(df["ANO"], errors="coerce")
 
-        # Remove linhas sem data válida
+        # =========================================================
+        # 5) CRIAÇÃO DA DATA
+        # =========================================================
         df = df.dropna(subset=["ANO", "MONTH_NUM"]).copy()
 
-        # Ajusta tipos
         df["ANO"] = df["ANO"].astype(int)
         df["MONTH_NUM"] = df["MONTH_NUM"].astype(int)
 
-        # Criação da data com tratamento
         df["DATE"] = pd.to_datetime(
             df["ANO"].astype(str) + "-" + df["MONTH_NUM"].astype(str).str.zfill(2) + "-01",
             errors="coerce"
@@ -105,12 +179,19 @@ def fetch_analytics_data(table_name):
 
         df = df.dropna(subset=["DATE"]).copy()
 
-        # Garantia de colunas principais
-        for required_col in ["VL_TOTAL", "QT_TOTAL"]:
-            if required_col not in df.columns:
-                df[required_col] = 0
+        # =========================================================
+        # 6) LIMPEZA FINAL
+        # =========================================================
+        df["Municipio"] = df["Municipio"].astype(str).str.strip()
 
-        return df.sort_values("DATE")
+        df = df[
+            (df["Municipio"] != "") &
+            (df["Municipio"].str.lower() != "nan")
+        ].copy()
+
+        df = df.sort_values("DATE").reset_index(drop=True)
+
+        return df
 
     except Exception as e:
         st.error(f"Engine Error: {e}")
@@ -122,51 +203,51 @@ def fetch_analytics_data(table_name):
 
 
 # --- SIDEBAR & FILTERS ---
-st.sidebar.title("🏥 Strategic Control")
+st.sidebar.title("🏥 Controle Estratégico")
 st.sidebar.markdown("---")
 
-source_opt = st.sidebar.radio("Business Unit:", ["Hospitalar (SIH)", "Ambulatorial (SIA)"])
+source_opt = st.sidebar.radio("Unidade de Negócios:", ["Hospitalar (SIH)", "Ambulatorial (SIA)"])
 table_name = "sih_data" if "SIH" in source_opt else "sia_data"
 
 raw_df = fetch_analytics_data(table_name)
 
-# 🔍 DEBUG DOS DADOS (cole aqui)
-with st.expander("DEBUG - Diagnóstico da base", expanded=True):
-    st.write("Colunas:", raw_df.columns.tolist())
+# DEBUG opcional
+with st.expander("DEBUG - Diagnóstico da base", expanded=False):
+    st.write("Colunas:", raw_df.columns.tolist() if not raw_df.empty else [])
+    if not raw_df.empty:
+        st.write("Tipos:")
+        st.dataframe(pd.DataFrame({
+            "coluna": raw_df.columns,
+            "dtype": [str(raw_df[c].dtype) for c in raw_df.columns]
+        }), use_container_width=True)
 
-    st.write("Tipos:")
-    st.dataframe(pd.DataFrame({
-        "coluna": raw_df.columns,
-        "dtype": [str(raw_df[c].dtype) for c in raw_df.columns]
-    }), use_container_width=True)
+        st.write("Primeiras 20 linhas:")
+        st.dataframe(raw_df.head(20), use_container_width=True)
 
-    st.write("Primeiras 20 linhas:")
-    st.dataframe(raw_df.head(20), use_container_width=True)
+        if "MES" in raw_df.columns:
+            st.write("Valores únicos de MES:")
+            st.write(sorted(raw_df["MES"].astype(str).unique().tolist()))
 
-    if "MES" in raw_df.columns:
-        st.write("Valores únicos de MES:")
-        st.write(sorted(raw_df["MES"].astype(str).unique().tolist()))
+        for col in ["QT_TOTAL", "VL_TOTAL"]:
+            if col in raw_df.columns:
+                st.write(f"Amostra bruta de {col}:")
+                st.write(raw_df[col].astype(str).head(20).tolist())
 
-    for col in ["QT_TOTAL", "VL_TOTAL"]:
-        if col in raw_df.columns:
-            st.write(f"Amostra bruta de {col}:")
-            st.write(raw_df[col].astype(str).head(20).tolist())
-
-            st.write(f"Resumo de {col}:")
-            st.write({
-                "nulos": int(raw_df[col].isna().sum()),
-                "min": pd.to_numeric(raw_df[col], errors="coerce").min(),
-                "max": pd.to_numeric(raw_df[col], errors="coerce").max(),
-            })
+                st.write(f"Resumo de {col}:")
+                st.write({
+                    "nulos": int(raw_df[col].isna().sum()),
+                    "min": pd.to_numeric(raw_df[col], errors="coerce").min(),
+                    "max": pd.to_numeric(raw_df[col], errors="coerce").max(),
+                })
 
 if raw_df.empty:
-    st.warning("Database synchronization in progress...")
+    st.warning("Sincronização do banco em andamento ou dados indisponíveis.")
     st.stop()
 
-mun_col = raw_df.columns[0]
+mun_col = "Municipio"
 
-# Filtros Dinâmicos
-with st.sidebar.expander("📅 Time Window", expanded=True):
+# Filtros dinâmicos
+with st.sidebar.expander("📅 Janela de tempo", expanded=True):
     anos = sorted(pd.Series(raw_df["ANO"].dropna().unique()).tolist())
     default_anos = anos[-1:] if anos else []
     sel_anos = st.multiselect("Anos", anos, default=default_anos)
@@ -174,11 +255,11 @@ with st.sidebar.expander("📅 Time Window", expanded=True):
     meses = sorted(pd.Series(raw_df["MES"].dropna().astype(str).unique()).tolist())
     sel_meses = st.multiselect("Meses", meses, default=meses)
 
-with st.sidebar.expander("📍 Geographic Scope", expanded=False):
+with st.sidebar.expander("📍 Âmbito Geográfico", expanded=False):
     muns = sorted(raw_df[mun_col].dropna().astype(str).unique().tolist())
     sel_muns = st.multiselect("Municípios", muns)
 
-# Data Filtering
+# Filtering
 df = raw_df.copy()
 
 if sel_anos:
@@ -200,14 +281,14 @@ st.caption(f"Última sincronização: {datetime.now().strftime('%d/%m/%Y %H:%M')
 
 tab_exec, tab_subgroups, tab_geospatial, tab_validation = st.tabs([
     "🚀 Visão Executiva",
-    "🧩 Decomposição de Subgrupos",
+    "🧩 Decomposição de subgrupos",
     "🗺️ Inteligência Regional",
     "⚙️ Auditoria Técnica"
 ])
 
 # 1. EXECUTIVE OVERVIEW
 with tab_exec:
-    st.subheader("Performance Financeira e Operacional")
+    st.subheader("Desempenho Financeiro e Operacional")
 
     last_month = df["DATE"].max()
     prev_month = last_month - pd.DateOffset(months=1) if pd.notna(last_month) else None
@@ -238,12 +319,12 @@ with tab_exec:
     )
 
     kpi_col2.metric(
-        "Total Procedimentos",
+        "Total de Procedimentos",
         f"{total_qty/1e3:.1f}k",
         f"{calc_delta(curr_metrics['QT_TOTAL'], prev_metrics['QT_TOTAL']):.1f}% vs mês ant."
     )
 
-    kpi_col3.metric("Ticket Médio (Custo/Proc)", f"R$ {avg_cost:,.2f}")
+    kpi_col3.metric("Ticket médio (Custo/Proc)", f"R$ {avg_cost:,.2f}")
     kpi_col4.metric("Abrangência (Municípios)", f"{unique_muns}")
 
     st.divider()
@@ -398,8 +479,6 @@ with tab_geospatial:
         eff_df["QT_TOTAL"] = pd.to_numeric(eff_df["QT_TOTAL"], errors="coerce")
         eff_df["VL_TOTAL"] = pd.to_numeric(eff_df["VL_TOTAL"], errors="coerce")
 
-        # Corrige o erro principal do gráfico:
-        # evita divisão por zero e remove valores inválidos
         eff_df["Custo_Medio"] = eff_df["VL_TOTAL"] / eff_df["QT_TOTAL"].replace(0, pd.NA)
         eff_df = eff_df.dropna(subset=["QT_TOTAL", "VL_TOTAL", "Custo_Medio"]).copy()
         eff_df = eff_df[
@@ -425,14 +504,13 @@ with tab_geospatial:
 # 4. TECHNICAL AUDIT
 with tab_validation:
     st.subheader("Auditoria de Integridade dos Dados")
-    st.info("💡 Este módulo permite a auditoria direta conforme o fluxo do quadro branco.")
+    st.info("💡 Este módulo permite a auditoria direta da base carregada.")
 
     col_audit1, col_audit2 = st.columns(2)
 
     with col_audit1:
         st.markdown("**Log de Auditoria SQL**")
 
-        # Corrigido: ORDER BY DATE era inválido porque DATE não existe na query SQL
         audit_query = f"""
         SELECT
             ANO,
@@ -462,4 +540,4 @@ with tab_validation:
         st.dataframe(df.head(1000), use_container_width=True)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Powered by Data Engine")
+st.sidebar.caption("Desenvolvido por Data Engine")
